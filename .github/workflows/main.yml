@@ -9,7 +9,7 @@ on:
 
 env:
   # ⬇️ Ajusta esto según dónde viva tu app
-  WORKDIR: "PG"   # usa "." si artisan está en la raíz
+  WORKDIR: "."   # usa "." si artisan está en la raíz
 
 jobs:
   tests:
