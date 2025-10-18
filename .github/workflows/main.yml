@@ -9,7 +9,7 @@ on:
 
 env:
   # ⬇️ Ajusta esto según dónde viva tu app
-  WORKDIR: "PG"   # usa "." si artisan está en la raíz
+  WORKDIR: "."   # usa "." si artisan está en la raíz
 
 jobs:
   tests:
@@ -111,11 +111,14 @@ jobs:
         working-directory: ${{ env.WORKDIR }}
         run: php artisan migrate --seed --no-interaction
 
-      - name: Laravel Pint (opcional)
+      - name: Laravel Pint (warning-only)
         working-directory: ${{ env.WORKDIR }}
-        continue-on-error: true
         run: |
-          if [ -f vendor/bin/pint ]; then vendor/bin/pint --test; else echo "Pint no instalado"; fi
+          if [ -f vendor/bin/pint ]; then
+            vendor/bin/pint --test || echo "Pint encontró issues (no bloquea el CI)."
+          else
+            echo "Pint no instalado"
+          fi
 
       - name: PHPStan (opcional)
         working-directory: ${{ env.WORKDIR }}
