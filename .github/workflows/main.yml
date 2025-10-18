@@ -120,6 +120,12 @@ jobs:
         continue-on-error: true
         run: composer audit --no-interaction
 
+      - name: Blade formatter (npm)
+        if: hashFiles(format('{0}/resources/views/**/*.blade.php', env.WORKDIR)) != ''
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          npx --yes blade-formatter -c --write "resources/views/**/*.blade.php" || true
+
       - name: Laravel Pint (warning-only)
         working-directory: ${{ env.WORKDIR }}
         run: |
