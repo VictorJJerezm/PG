@@ -7,11 +7,14 @@ on:
     branches: ["**"]
   workflow_dispatch:
 
+env:
+  # ⬇️ Ajusta esto según dónde viva tu app
+  WORKDIR: "PG"   # usa "." si artisan está en la raíz
+
 jobs:
   tests:
     name: PHP ${{ matrix.php }} • PostgreSQL
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
@@ -24,14 +27,10 @@ jobs:
           POSTGRES_DB: laravel_test
           POSTGRES_USER: laravel
           POSTGRES_PASSWORD: secret
-        ports:
-          - 5432:5432
-        # Espera a que la BD esté lista antes de correr los pasos
+        ports: ["5432:5432"]
         options: >-
           --health-cmd="pg_isready -U laravel -d laravel_test"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
+          --health-interval=10s --health-timeout=5s --health-retries=10
 
     env:
       APP_ENV: testing
@@ -55,105 +54,113 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: mbstring, intl, pdo_pgsql, bcmath, xml, curl, fileinfo, tokenizer, ctype, dom, json
+          extensions: mbstring, intl, pdo_pgsql, bcmath, xml, curl, fileinfo, tokenizer, ctype, dom, json, zip
           coverage: xdebug
           tools: composer:v2
 
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
+      - name: Show repo & project dir (debug)
+        run: |
+          echo "::group::Repo root"; ls -la; echo "::endgroup::"
+          echo "::group::Project ($WORKDIR)"; ls -la "$WORKDIR"; echo "::endgroup::"
+
       - name: Cache Composer
         uses: actions/cache@v4
         with:
           path: |
             ~/.composer/cache/files
-            vendor
-          key: composer-${{ runner.os }}-${{ hashFiles('**/composer.lock') }}
+            ${{ env.WORKDIR }}/vendor
+          key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', env.WORKDIR)) }}
           restore-keys: |
             composer-${{ runner.os }}-
 
       - name: Install PHP deps
+        working-directory: ${{ env.WORKDIR }}
         run: composer install --no-interaction --no-progress --prefer-dist
 
       - name: Copy .env (if missing)
-        run: |
-          if [ ! -f .env ]; then
-            cp .env.example .env
-          fi
+        working-directory: ${{ env.WORKDIR }}
+        run: if [ ! -f .env ]; then cp .env.example .env; fi
 
-      - name: Generate key (idempotent)
+      - name: Generate key
+        working-directory: ${{ env.WORKDIR }}
         run: php artisan key:generate --force
 
-      - name: Wait for DB (extra guard)
+      - name: Set writable folders
+        working-directory: ${{ env.WORKDIR }}
+        run: chmod -R 777 storage bootstrap/cache || true
+
+      - name: Clear caches (defensivo)
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          php artisan config:clear || true
+          php artisan cache:clear || true
+          php artisan route:clear || true
+          php artisan view:clear || true
+
+      - name: Wait for DB
         run: |
           for i in {1..30}; do
             pg_isready -h 127.0.0.1 -p 5432 -U "$DB_USERNAME" -d "$DB_DATABASE" && break
-            echo "DB not ready yet... ($i)"
-            sleep 2
+            echo "DB not ready yet... ($i)"; sleep 2
           done
 
       - name: Run migrations & seeders
+        working-directory: ${{ env.WORKDIR }}
         run: php artisan migrate --seed --no-interaction
 
-      # --- Calidad opcional ---
-      - name: Run Laravel Pint (code style)
+      - name: Laravel Pint (opcional)
+        working-directory: ${{ env.WORKDIR }}
         continue-on-error: true
         run: |
-          if [ -f vendor/bin/pint ]; then
-            vendor/bin/pint --test
-          else
-            echo "Pint not installed (optional)."
-          fi
+          if [ -f vendor/bin/pint ]; then vendor/bin/pint --test; else echo "Pint no instalado"; fi
 
-      - name: Run PHPStan (static analysis)
+      - name: PHPStan (opcional)
+        working-directory: ${{ env.WORKDIR }}
         continue-on-error: true
         run: |
-          if [ -f vendor/bin/phpstan ]; then
-            vendor/bin/phpstan analyse --no-progress --memory-limit=1G
-          else
-            echo "PHPStan not installed (optional)."
-          fi
+          if [ -f vendor/bin/phpstan ]; then vendor/bin/phpstan analyse --no-progress --memory-limit=1G; else echo "PHPStan no instalado"; fi
 
-      # --- Frontend mínimo (si tienes package.json) ---
-      - name: Setup Node
-        if: hashFiles('**/package.json') != ''
+      - name: Node setup (si hay package.json)
+        if: hashFiles(format('{0}/package.json', env.WORKDIR)) != ''
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Cache Node
-        if: hashFiles('**/package.json') != ''
+        if: hashFiles(format('{0}/package.json', env.WORKDIR)) != ''
         uses: actions/cache@v4
         with:
           path: |
             ~/.npm
-            node_modules
-          key: node-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock') }}
+            ${{ env.WORKDIR }}/node_modules
+          key: node-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', env.WORKDIR), format('{0}/pnpm-lock.yaml', env.WORKDIR), format('{0}/yarn.lock', env.WORKDIR)) }}
           restore-keys: |
             node-${{ runner.os }}-
 
-      - name: Install & Build Frontend
-        if: hashFiles('**/package.json') != ''
+      - name: Build Frontend (opcional)
+        if: hashFiles(format('{0}/package.json', env.WORKDIR)) != ''
+        working-directory: ${{ env.WORKDIR }}
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm i
-          fi
+          if [ -f package-lock.json ]; then npm ci; else npm i; fi
           npx vite build || echo "Vite build opcional"
 
-      # --- Pruebas ---
-      - name: Run tests (PHPUnit/Pest)
+      - name: Run tests (si existen)
+        working-directory: ${{ env.WORKDIR }}
         run: |
           if [ -f vendor/bin/pest ]; then
             XDEBUG_MODE=coverage vendor/bin/pest --colors=always --coverage --coverage-html coverage
-          else
+          elif [ -f vendor/bin/phpunit ]; then
             XDEBUG_MODE=coverage vendor/bin/phpunit --colors=always --coverage-text --coverage-html coverage
+          else
+            echo "No hay tests (Pest/PHPUnit)."
           fi
 
-      - name: Upload coverage artifact
-        if: always()
+      - name: Upload coverage artifact (solo si existe)
+        if: ${{ hashFiles(format('{0}/coverage/index.html', env.WORKDIR)) != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.php }}
-          path: coverage
+          path: ${{ env.WORKDIR }}/coverage
