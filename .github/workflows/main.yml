@@ -1,0 +1,159 @@
+name: Laravel CI (PostgreSQL)
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: PHP ${{ matrix.php }} • PostgreSQL
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3']
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laravel_test
+          POSTGRES_USER: laravel
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        # Espera a que la BD esté lista antes de correr los pasos
+        options: >-
+          --health-cmd="pg_isready -U laravel -d laravel_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      APP_ENV: testing
+      APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      CACHE_DRIVER: file
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: file
+      LOG_CHANNEL: stack
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: laravel_test
+      DB_USERNAME: laravel
+      DB_PASSWORD: secret
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: PHP setup
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, intl, pdo_pgsql, bcmath, xml, curl, fileinfo, tokenizer, ctype, dom, json
+          coverage: xdebug
+          tools: composer:v2
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.composer/cache/files
+            vendor
+          key: composer-${{ runner.os }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            composer-${{ runner.os }}-
+
+      - name: Install PHP deps
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Copy .env (if missing)
+        run: |
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+      - name: Generate key (idempotent)
+        run: php artisan key:generate --force
+
+      - name: Wait for DB (extra guard)
+        run: |
+          for i in {1..30}; do
+            pg_isready -h 127.0.0.1 -p 5432 -U "$DB_USERNAME" -d "$DB_DATABASE" && break
+            echo "DB not ready yet... ($i)"
+            sleep 2
+          done
+
+      - name: Run migrations & seeders
+        run: php artisan migrate --seed --no-interaction
+
+      # --- Calidad opcional ---
+      - name: Run Laravel Pint (code style)
+        continue-on-error: true
+        run: |
+          if [ -f vendor/bin/pint ]; then
+            vendor/bin/pint --test
+          else
+            echo "Pint not installed (optional)."
+          fi
+
+      - name: Run PHPStan (static analysis)
+        continue-on-error: true
+        run: |
+          if [ -f vendor/bin/phpstan ]; then
+            vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+          else
+            echo "PHPStan not installed (optional)."
+          fi
+
+      # --- Frontend mínimo (si tienes package.json) ---
+      - name: Setup Node
+        if: hashFiles('**/package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Node
+        if: hashFiles('**/package.json') != ''
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: node-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock') }}
+          restore-keys: |
+            node-${{ runner.os }}-
+
+      - name: Install & Build Frontend
+        if: hashFiles('**/package.json') != ''
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm i
+          fi
+          npx vite build || echo "Vite build opcional"
+
+      # --- Pruebas ---
+      - name: Run tests (PHPUnit/Pest)
+        run: |
+          if [ -f vendor/bin/pest ]; then
+            XDEBUG_MODE=coverage vendor/bin/pest --colors=always --coverage --coverage-html coverage
+          else
+            XDEBUG_MODE=coverage vendor/bin/phpunit --colors=always --coverage-text --coverage-html coverage
+          fi
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.php }}
+          path: coverage
