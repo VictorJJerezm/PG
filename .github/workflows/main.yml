@@ -115,6 +115,11 @@ jobs:
         working-directory: ${{ env.WORKDIR }}
         run: php artisan migrate:fresh --seed --no-interaction
 
+      - name: Composer audit
+        working-directory: ${{ env.WORKDIR }}
+        continue-on-error: true
+        run: composer audit --no-interaction
+
       - name: Laravel Pint (warning-only)
         working-directory: ${{ env.WORKDIR }}
         run: |
