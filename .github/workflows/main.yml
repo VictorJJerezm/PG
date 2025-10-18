@@ -111,6 +111,10 @@ jobs:
         working-directory: ${{ env.WORKDIR }}
         run: php artisan migrate --seed --no-interaction
 
+      - name: Migrate fresh + seed (sanity)
+        working-directory: ${{ env.WORKDIR }}
+        run: php artisan migrate:fresh --seed --no-interaction
+
       - name: Laravel Pint (warning-only)
         working-directory: ${{ env.WORKDIR }}
         run: |
