@@ -38,14 +38,14 @@ class ReporteController extends Controller
         $ingresosMensuales = Pedido::whereBetween('fecha', [$desde, $hasta])
             ->selectRaw("to_char(date_trunc('month', fecha), 'YYYY-MM') as mes")
             ->selectRaw('SUM(total) as total')
-            ->groupBy(DB::raw("date_trunc('month', fecha)"))
-            ->orderBy(DB::raw("date_trunc('month', fecha)"))
+            ->groupBy(\DB::raw("date_trunc('month', fecha)"))
+            ->orderBy(\DB::raw("date_trunc('month', fecha)"))
             ->get();
 
         $ingresosTotales = Pedido::whereBetween('fecha', [$desde, $hasta])->sum('total');
 
         $pedEstados = Pedido::whereBetween('fecha', [$desde, $hasta])
-            ->select('estado', DB::raw('count(*) as total'))
+            ->select('estado', \DB::raw('count(*) as total'))
             ->groupBy('estado')
             ->pluck('total','estado');
 
@@ -141,7 +141,7 @@ class ReporteController extends Controller
             ->get();
 
         // Serie mensual de consumo (Q)
-        $serie = DB::table('pedido_detalle as d')
+        $serie = \DB::table('pedido_detalle as d')
             ->join('pedidos as pe','pe.id_pedido','=','d.id_pedido')
             ->whereBetween('pe.fecha', [$desde,$hasta])
             ->whereNotNull('d.id_material')
